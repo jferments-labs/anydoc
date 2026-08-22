@@ -1,4 +1,4 @@
-name: Fork CI (GitHub-hosted)
+name: Fork CI (self-hosted)
 
 on:
   workflow_dispatch:
@@ -16,62 +16,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
-    name: Rust
-    runs-on: ubuntu-24.04
+  validate:
+    name: Full validation
+    runs-on: [self-hosted, linux, x64, anydoc-ci]
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
+
+      - name: Record tested commit
+        run: git rev-parse HEAD
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked
+          targets: wasm32-unknown-unknown
 
-  node:
-    name: Node bindings
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
       - uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: npm
           cache-dependency-path: node/package-lock.json
-      - run: npm ci
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --locked
+
+      - name: Regenerate source-location fixture
+        run: |
+          python tests/gen_source_location_fixtures.py
+          git diff --exit-code -- tests/source-location-fixtures/source-origin.xlsx
+
+      - name: Install Node dependencies
+        run: npm ci
         working-directory: node
-      - run: npm run build
+
+      - name: Build Node bindings
+        run: npm run build
         working-directory: node
-      - run: npm test
+
+      - name: Test Node bindings
+        run: npm test
         working-directory: node
-      - name: Committed bindings are up to date
+
+      - name: Committed Node bindings are up to date
         run: git diff --exit-code -- node/index.js node/index.d.ts
 
-  wasm:
-    name: Wasm bindings
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: wasm32-unknown-unknown
-      - run: cargo clippy -p anydoc-wasm --target wasm32-unknown-unknown -- -D warnings
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26
+      - name: Install maturin
+        run: python -m pip install maturin
+
+      - name: Build Python wheel
+        run: >
+          maturin build --release --locked --manifest-path python/Cargo.toml
+          --out "$RUNNER_TEMP/anydoc-dist"
+
+      - name: Install Python wheel
+        run: >
+          python -m pip install --no-index --find-links "$RUNNER_TEMP/anydoc-dist"
+          firecrawl-anydoc
+
+      - name: Test Python bindings
+        run: python -m unittest discover -s python/tests
+
+      - name: WASM clippy
+        run: cargo clippy -p anydoc-wasm --target wasm32-unknown-unknown -- -D warnings
+
       - name: Install wasm-pack 0.15.0
         shell: bash
         run: |
@@ -79,22 +100,12 @@ jobs:
           curl -sSfL https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
             | tar xz --strip-components=1 -C "$RUNNER_TEMP/wasm-pack" wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack
           echo "$RUNNER_TEMP/wasm-pack" >> "$GITHUB_PATH"
-      - run: wasm-pack build wasm --release --target web --scope firecrawl
-      - run: node --test wasm/test.mjs
 
-  python:
-    name: Python bindings
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-      - run: pip install maturin
-      - run: maturin build --release --locked --manifest-path python/Cargo.toml --out dist
-      - run: pip install --no-index --find-links dist firecrawl-anydoc
-      - run: python -m unittest discover -s python/tests
+      - name: Build WASM bindings
+        run: wasm-pack build wasm --release --target web --scope firecrawl
+
+      - name: Test WASM bindings
+        run: node --test wasm/test.mjs
+
+      - name: Final tracked-tree check
+        run: git diff --exit-code
