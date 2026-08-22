@@ -71,6 +71,12 @@ def to_document(data: bytes | bytearray, format: Format | None = None) -> Docume
     Unsupported for `pdf`: PDF conversion produces Markdown directly and has
     no document-model form; use `to_markdown_bytes`."""
 
+def to_document_with_locations(
+    data: bytes | bytearray, format: Format | None = None
+) -> LocatedDocument:
+    """Parse a document together with source-defined structural locations
+    when available. Existing `to_document` output remains unchanged."""
+
 @final
 class Document:
     blocks: list[Block]
@@ -78,6 +84,41 @@ class Document:
     """Footnote and endnote bodies, referenced from text by a `note_ref`
     inline."""
     assets: list[Asset]
+
+@final
+class LocatedDocument:
+    document: Document
+    source_map: SourceMap
+
+@final
+class SourceMap:
+    units: list[SourceUnit]
+    spans: list[SourceSpan]
+
+@final
+class SourceUnit:
+    kind: Literal["slide", "spine_item", "outline_section"]
+    index: int
+    """Zero-based position in the source's own order."""
+    name: str | None
+    """Source-defined name when one exists."""
+    origin_part: str | None
+    """Package part or stream this unit came from when available."""
+
+@final
+class SourceSpan:
+    unit_index: int
+    """Index into `source_map.units`."""
+    block_start: int
+    block_end: int
+    """Half-open range in `document.blocks`."""
+    coordinates: SourceCoordinates | None
+
+@final
+class SourceCoordinates:
+    kind: Literal["outline_level"]
+    level: int
+    """Source heading/outline depth, one-based."""
 
 @final
 class Block:
@@ -210,5 +251,5 @@ class Asset:
     media_type: str
     """MIME type, e.g. `image/png`."""
     origin_part: str
-    """Package part or stream the asset came from, for provenance."""
+    """Package part or stream this unit came from, for provenance."""
     data: bytes

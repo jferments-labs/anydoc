@@ -4,8 +4,10 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 mod document;
+mod locations;
 
 pub use document::*;
+pub use locations::*;
 
 /// Input format, named after the extension that identifies it. Container
 /// variants that share a parser (`.docm`, `.xlsm`, `.ppsx`, ...) map onto
@@ -134,6 +136,21 @@ pub fn to_document(bytes: Uint8Array, format: Option<Format>) -> AsyncTask<Docum
     })
 }
 
+/// Parse an in-memory document together with format-native source locations
+/// when the selected frontend retains them. Existing `toDocument` output is
+/// unchanged; the parsed document is nested under `document` here.
+#[napi(ts_return_type = "Promise<LocatedDocument>")]
+pub fn to_document_with_locations(
+    bytes: Uint8Array,
+    format: Option<Format>,
+) -> AsyncTask<LocatedDocumentTask> {
+    AsyncTask::new(LocatedDocumentTask {
+        bytes: bytes.to_vec(),
+        format: format.map(Into::into),
+        failure: Failure::default(),
+    })
+}
+
 /// The kind of a failed conversion, held between the two threads a rejection
 /// crosses: `compute` runs on the libuv pool, where there is no `Env` to build
 /// a JS error with, and `reject` runs on the JS thread, where there is.
@@ -217,6 +234,30 @@ impl Task for DocumentTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         anydoc::to_document(&self.bytes, self.format).map_err(|e| self.failure.capture(e))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output.into())
+    }
+
+    fn reject(&mut self, env: Env, error: Error) -> Result<Self::JsValue> {
+        Err(self.failure.reject(env, error))
+    }
+}
+
+pub struct LocatedDocumentTask {
+    bytes: Vec<u8>,
+    format: Option<anydoc::Format>,
+    failure: Failure,
+}
+
+impl Task for LocatedDocumentTask {
+    type Output = anydoc::model::LocatedDocument;
+    type JsValue = LocatedDocument;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        anydoc::to_document_with_locations(&self.bytes, self.format)
+            .map_err(|e| self.failure.capture(e))
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {

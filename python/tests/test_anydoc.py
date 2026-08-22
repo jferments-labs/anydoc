@@ -9,11 +9,13 @@ from pathlib import Path
 import anydoc
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
+SOURCE_FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "source-location-fixtures"
 OUTLINE = FIXTURES / "docx" / "handmade-outline.docx"
 RICH = FIXTURES / "docx" / "handmade-rich.docx"
 CSV = FIXTURES / "csv" / "sheet.csv"
 ENCRYPTED = FIXTURES / "malformed" / "encrypted--errors.odt"
 ZIPBOMB = FIXTURES / "abuse" / "zipbomb--errors.docx"
+SOURCE_PPTX = SOURCE_FIXTURES / "two-slides.pptx"
 
 
 class AnydocTest(unittest.TestCase):
@@ -33,13 +35,44 @@ class AnydocTest(unittest.TestCase):
             anydoc.to_markdown_bytes(CSV.read_bytes())
         self.assertIn("| --- |", anydoc.to_markdown_bytes(CSV.read_bytes(), "csv"))
 
-    def test_to_document_exposes_the_document_model(self):
+    def test_to_document_exposes_the_unchanged_document_model(self):
         document = anydoc.to_document(OUTLINE.read_bytes(), "docx")
         heading = next(block for block in document.blocks if block.kind == "heading")
         self.assertTrue(1 <= heading.level <= 6)
         self.assertIsInstance(heading.content[0].text, str)
         self.assertEqual(heading.content[0].kind, "text")
         self.assertIsInstance(heading.content[0].style.bold, bool)
+        self.assertFalse(hasattr(document, "source_map"))
+
+    def test_to_document_with_locations_exposes_slide_provenance_opt_in(self):
+        located = anydoc.to_document_with_locations(SOURCE_PPTX.read_bytes(), "pptx")
+        self.assertEqual(len(located.source_map.units), 2)
+        self.assertEqual(
+            [(unit.kind, unit.index, unit.origin_part) for unit in located.source_map.units],
+            [
+                ("slide", 0, "ppt/slides/slide1.xml"),
+                ("slide", 1, "ppt/slides/slide2.xml"),
+            ],
+        )
+        self.assertEqual(
+            [(span.unit_index, span.block_start, span.block_end) for span in located.source_map.spans],
+            [(0, 0, 1), (1, 1, 2)],
+        )
+        self.assertEqual([block.kind for block in located.document.blocks], ["paragraph", "paragraph"])
+
+    def test_to_document_with_locations_exposes_word_outline_sections(self):
+        plain = anydoc.to_document(OUTLINE.read_bytes(), "docx")
+        located = anydoc.to_document_with_locations(OUTLINE.read_bytes(), "docx")
+        self.assertEqual(len(located.document.blocks), len(plain.blocks))
+        self.assertTrue(any(unit.kind == "outline_section" for unit in located.source_map.units))
+        self.assertTrue(
+            any(
+                span.coordinates is not None
+                and span.coordinates.kind == "outline_level"
+                and span.coordinates.level >= 1
+                for span in located.source_map.spans
+            )
+        )
 
     def test_to_document_carries_embedded_assets_as_bytes(self):
         document = anydoc.to_document(RICH.read_bytes(), "docx")

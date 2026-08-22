@@ -13,16 +13,20 @@ import {
   formatFromExtension,
   formatFromPath,
   toDocument,
+  toDocumentWithLocations,
   toMarkdown,
   toMarkdownBytes,
 } from './index.js'
 
 const fixture = (name) => fileURLToPath(new URL(`../tests/fixtures/${name}`, import.meta.url))
+const sourceFixture = (name) =>
+  fileURLToPath(new URL(`../tests/source-location-fixtures/${name}`, import.meta.url))
 
 const OUTLINE = fixture('docx/handmade-outline.docx')
 const RICH = fixture('docx/handmade-rich.docx')
 const CSV = fixture('csv/sheet.csv')
 const ENCRYPTED = fixture('malformed/encrypted--errors.odt')
+const SOURCE_PPTX = sourceFixture('two-slides.pptx')
 
 test('toMarkdown detects the format from the file content', async () => {
   const markdown = await toMarkdown(OUTLINE)
@@ -42,13 +46,39 @@ test('toMarkdownBytes detects the format when none is named', async () => {
   assert.match(await toMarkdownBytes(await readFile(CSV), 'csv'), /\| --- \|/)
 })
 
-test('toDocument exposes the document model', async () => {
+test('toDocument exposes the unchanged document model', async () => {
   const document = await toDocument(await readFile(OUTLINE), 'docx')
   const heading = document.blocks.find((block) => block.kind === 'heading')
   assert.ok(heading.level >= 1 && heading.level <= 6)
   assert.equal(typeof heading.content[0].text, 'string')
   assert.equal(heading.content[0].kind, 'text')
   assert.equal(typeof heading.content[0].style.bold, 'boolean')
+  assert.equal('sourceMap' in document, false)
+})
+
+test('toDocumentWithLocations exposes slide provenance opt in', async () => {
+  const located = await toDocumentWithLocations(await readFile(SOURCE_PPTX), 'pptx')
+  assert.deepEqual(located.sourceMap.units, [
+    { kind: 'slide', index: 0, originPart: 'ppt/slides/slide1.xml' },
+    { kind: 'slide', index: 1, originPart: 'ppt/slides/slide2.xml' },
+  ])
+  assert.deepEqual(located.sourceMap.spans, [
+    { unitIndex: 0, blockStart: 0, blockEnd: 1 },
+    { unitIndex: 1, blockStart: 1, blockEnd: 2 },
+  ])
+  assert.deepEqual(located.document.blocks.map((block) => block.kind), ['paragraph', 'paragraph'])
+})
+
+test('toDocumentWithLocations exposes Word outline sections without changing toDocument', async () => {
+  const plain = await toDocument(await readFile(OUTLINE), 'docx')
+  const located = await toDocumentWithLocations(await readFile(OUTLINE), 'docx')
+  assert.equal(located.document.blocks.length, plain.blocks.length)
+  assert.ok(located.sourceMap.units.some((unit) => unit.kind === 'outlineSection'))
+  assert.ok(
+    located.sourceMap.spans.some(
+      (span) => span.coordinates?.kind === 'outlineLevel' && span.coordinates.level >= 1,
+    ),
+  )
 })
 
 test('toDocument carries embedded assets as buffers', async () => {

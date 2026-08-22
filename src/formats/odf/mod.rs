@@ -5,7 +5,9 @@ mod table;
 mod text;
 
 use crate::error::ConvertError;
-use crate::model::{Block, Document, Inline, inlines_are_empty};
+use crate::model::{
+    Block, Document, Inline, LocatedDocument, SourceMap, SourceUnitKind, inlines_are_empty,
+};
 use crate::package::Package;
 use crate::package::xml::{Element, ns};
 use crate::shared::assets::AssetSink;
@@ -13,6 +15,10 @@ use std::cell::RefCell;
 use text::{Ctx, parse_container};
 
 pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
+    parse_with_locations(bytes).map(|located| located.document)
+}
+
+pub fn parse_with_locations(bytes: &[u8]) -> Result<LocatedDocument, ConvertError> {
     let pkg = RefCell::new(Package::open(bytes)?);
 
     if is_encrypted(&pkg)? {
@@ -37,13 +43,16 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
 
     let assets = RefCell::new(AssetSink::new());
     let ctx = Ctx::new(&styles, &pkg, &assets);
+    let mut source_map = SourceMap::default();
+    let mut outline_document = false;
 
     let blocks = if let Some(text) = body.find(ns::OFFICE, "text") {
+        outline_document = true;
         parse_container(text, &ctx)?
     } else if let Some(sheet) = body.find(ns::OFFICE, "spreadsheet") {
         table::parse_spreadsheet(sheet, &ctx)?
     } else if let Some(pres) = body.find(ns::OFFICE, "presentation") {
-        parse_presentation(pres, &ctx)?
+        parse_presentation(pres, &ctx, &mut source_map)?
     } else {
         return Err(ConvertError::malformed_part(
             "content.xml",
@@ -53,7 +62,11 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
 
     let notes = ctx.notes.into_inner();
     let assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(Document { blocks, notes, assets })
+    let document = Document { blocks, notes, assets };
+    if outline_document {
+        source_map.push_outline_sections(&document, Some("content.xml".to_string()));
+    }
+    Ok(LocatedDocument { document, source_map })
 }
 
 /// Encrypted ODF packages carry `manifest:encryption-data` elements on file
@@ -68,9 +81,20 @@ fn is_encrypted(pkg: &RefCell<Package>) -> Result<bool, ConvertError> {
     Ok(tree.first_descendant(ns::MANIFEST, "encryption-data").is_some())
 }
 
-fn parse_presentation(pres: &Element, ctx: &Ctx) -> Result<Vec<Block>, ConvertError> {
+fn parse_presentation(
+    pres: &Element,
+    ctx: &Ctx,
+    source_map: &mut SourceMap,
+) -> Result<Vec<Block>, ConvertError> {
     let mut blocks = Vec::new();
-    for page in pres.find_all(ns::DRAW, "page") {
+    for (page_index, page) in pres.find_all(ns::DRAW, "page").enumerate() {
+        let unit_index = source_map.push_unit(
+            SourceUnitKind::Slide,
+            page_index,
+            page.attr(ns::DRAW, "name").map(str::to_string),
+            Some("content.xml".to_string()),
+        );
+        let block_start = blocks.len();
         let mut title = Vec::new();
         let mut body = Vec::new();
         let mut notes = Vec::new();
@@ -81,6 +105,7 @@ fn parse_presentation(pres: &Element, ctx: &Ctx) -> Result<Vec<Block>, ConvertEr
         if !notes.is_empty() {
             blocks.push(Block::BlockQuote(notes));
         }
+        source_map.push_span(unit_index, block_start, blocks.len(), None);
     }
     Ok(blocks)
 }

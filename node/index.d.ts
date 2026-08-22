@@ -219,6 +219,11 @@ export interface ListItem {
   markerLabel?: string
 }
 
+export interface LocatedDocument {
+  document: Document
+  sourceMap: SourceMap
+}
+
 /** The marker family a list uses in the source document. */
 export declare const enum MarkerKind {
   bullet = 'bullet',
@@ -238,6 +243,47 @@ export interface Note {
 export declare const enum NoteKind {
   footnote = 'footnote',
   endnote = 'endnote'
+}
+
+export interface SourceCoordinates {
+  kind: SourceCoordinatesKind
+  /** Source heading/outline depth, one-based. */
+  level: number
+}
+
+export declare const enum SourceCoordinatesKind {
+  outlineLevel = 'outlineLevel'
+}
+
+export interface SourceMap {
+  units: Array<SourceUnit>
+  spans: Array<SourceSpan>
+}
+
+export interface SourceSpan {
+  /** Index into `sourceMap.units`. */
+  unitIndex: number
+  /** Half-open range in `document.blocks`. */
+  blockStart: number
+  blockEnd: number
+  /** Finer format-native coordinates when available. */
+  coordinates?: SourceCoordinates
+}
+
+export interface SourceUnit {
+  kind: SourceUnitKind
+  /** Zero-based position in the source's own order. */
+  index: number
+  /** Source-defined name when one exists. */
+  name?: string
+  /** Package part or stream this unit came from when available. */
+  originPart?: string
+}
+
+export declare const enum SourceUnitKind {
+  slide = 'slide',
+  spineItem = 'spineItem',
+  outlineSection = 'outlineSection'
 }
 
 /** Fully resolved character style. */
@@ -277,6 +323,13 @@ export declare const enum TableKind {
  * Rejects with an `Error` carrying a `ConvertErrorCode` on `code`.
  */
 export declare function toDocument(bytes: Uint8Array, format?: Format | undefined | null): Promise<Document>
+
+/**
+ * Parse an in-memory document together with source-defined structural
+ * locations when the selected frontend retains them. Existing `toDocument`
+ * output is unchanged; the parsed document is nested under `document` here.
+ */
+export declare function toDocumentWithLocations(bytes: Uint8Array, format?: Format | undefined | null): Promise<LocatedDocument>
 
 /**
  * Convert a document file to Markdown. The format is detected from the file
