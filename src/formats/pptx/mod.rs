@@ -7,8 +7,8 @@ mod cascade;
 
 use crate::error::ConvertError;
 use crate::model::{
-    Block, Cell, Document, GridBuilder, ImageSource, Inline, LinkTarget, Style, TableKind,
-    inlines_are_empty,
+    Block, Cell, Document, GridBuilder, ImageSource, Inline, LinkTarget, LocatedDocument, SourceMap,
+    SourceUnitKind, Style, TableKind, inlines_are_empty,
 };
 use crate::package::relationships::{
     RelTarget, Relationships, TargetMode, read_rels, rel_target_bytes, rel_type, rels_part_for,
@@ -51,6 +51,10 @@ struct MasterInfo {
 }
 
 pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
+    parse_with_locations(bytes).map(|located| located.document)
+}
+
+pub fn parse_with_locations(bytes: &[u8]) -> Result<LocatedDocument, ConvertError> {
     let pkg = match Package::open(bytes) {
         Ok(p) => p,
         Err(e) => return Err(probe_ole(bytes).unwrap_or(e)),
@@ -92,6 +96,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     let mut layouts: HashMap<String, LayoutInfo> = HashMap::new();
     let mut masters: HashMap<String, MasterInfo> = HashMap::new();
     let mut blocks: Vec<Block> = Vec::new();
+    let mut source_map = SourceMap::default();
     let mut failed = 0usize;
     let instance_counter = StdCell::new(0u64);
     // Every slide has a start anchor id so internal slide-to-slide links
@@ -136,6 +141,13 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
             continue;
         };
         let slide_rels = &all_rels[slide_index];
+        let unit_index = source_map.push_unit(
+            SourceUnitKind::Slide,
+            slide_index,
+            None,
+            Some(slide_path.clone()),
+        );
+        let block_start = blocks.len();
 
         let layout_path = rel_target_of_type(slide_rels, slide_path, LAYOUT_REL);
         if let Some(lp) = &layout_path
@@ -207,13 +219,17 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
                 blocks.push(Block::BlockQuote(notes_blocks));
             }
         }
+        source_map.push_span(unit_index, block_start, blocks.len(), None);
     }
     if failed == slide_paths.len() {
         return Err(ConvertError::malformed("no slide in the presentation could be read"));
     }
 
     let assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(Document { blocks, notes: Vec::new(), assets })
+    Ok(LocatedDocument {
+        document: Document { blocks, notes: Vec::new(), assets },
+        source_map,
+    })
 }
 
 fn rel_target_of_type(rels: &Relationships, base: &str, rel_type: &str) -> Option<String> {

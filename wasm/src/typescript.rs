@@ -37,6 +37,41 @@ export interface Document {
   assets: Array<Asset>
 }
 
+export interface LocatedDocument {
+  document: Document
+  sourceMap: SourceMap
+}
+
+export interface SourceMap {
+  units: Array<SourceUnit>
+  spans: Array<SourceSpan>
+}
+
+export interface SourceUnit {
+  kind: 'slide' | 'spineItem' | 'outlineSection'
+  /** Zero-based position in the source's own order. */
+  index: number
+  /** Source-defined name when one exists. */
+  name?: string
+  /** Package part or stream this unit came from when available. */
+  originPart?: string
+}
+
+export interface SourceSpan {
+  /** Index into `sourceMap.units`. */
+  unitIndex: number
+  /** Half-open range in `document.blocks`. */
+  blockStart: number
+  blockEnd: number
+  coordinates?: SourceCoordinates
+}
+
+export interface SourceCoordinates {
+  kind: 'outlineLevel'
+  /** Source heading/outline depth, one-based. */
+  level: number
+}
+
 export type BlockKind =
   | 'heading'
   | 'paragraph'

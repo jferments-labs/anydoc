@@ -2,7 +2,10 @@
 //! chapter-scoped anchors so intra-book navigation survives.
 
 use crate::error::ConvertError;
-use crate::model::{AnchorId, Block, Document, ImageSource, Inline, LinkTarget};
+use crate::model::{
+    AnchorId, Block, Document, ImageSource, Inline, LinkTarget, LocatedDocument, SourceMap,
+    SourceUnitKind,
+};
 use crate::package::xml::Element;
 use crate::package::{Package, path};
 use crate::shared::assets::{AssetSink, media_type_for};
@@ -12,6 +15,14 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
+    parse_impl(bytes, false).map(|located| located.document)
+}
+
+pub fn parse_with_locations(bytes: &[u8]) -> Result<LocatedDocument, ConvertError> {
+    parse_impl(bytes, true)
+}
+
+fn parse_impl(bytes: &[u8], retain_locations: bool) -> Result<LocatedDocument, ConvertError> {
     let pkg = RefCell::new(Package::open(bytes)?);
 
     let container = pkg.borrow_mut().required_xml_part("META-INF/container.xml")?;
@@ -45,15 +56,18 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     // Intra-book links target these; links to any other resource stay
     // Relative.
     // A part holds one position in a reading order, and each repeat would
-    // cost another parse of it and another copy of its anchor.
+    // cost another parse of it and another copy of its anchor. Keep the
+    // original spine index before deduplication so locations never silently
+    // renumber around skipped or repeated entries.
     let mut spine_entries = 0usize;
-    let mut spine_paths: Vec<String> = Vec::new();
+    let mut spine_paths: Vec<(usize, String)> = Vec::new();
     let mut spine_parts: HashSet<String> = HashSet::new();
-    for href in opf
+    for (spine_index, href) in opf
         .descendants_any("itemref")
         .filter_map(|ir| ir.attr_any("idref"))
         .filter_map(|idref| manifest.get(idref))
         .map(|(href, _)| href.as_str())
+        .enumerate()
     {
         spine_entries += 1;
         let target = match path::resolve(&opf_path, href) {
@@ -64,14 +78,15 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
             }
         };
         if spine_parts.insert(target.path.clone()) {
-            spine_paths.push(target.path);
+            spine_paths.push((spine_index, target.path));
         }
     }
 
     let assets = RefCell::new(AssetSink::new());
     let mut css_cache: HashMap<String, Option<String>> = HashMap::new();
+    let mut source_map = SourceMap::default();
     let mut converted = 0usize;
-    for chapter_path in &spine_paths {
+    for (spine_index, chapter_path) in &spine_paths {
         let Some(tree) = pkg.borrow_mut().optional_xml_part(chapter_path)? else {
             log::warn!("skipping unusable chapter {chapter_path}");
             continue;
@@ -91,9 +106,21 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
             chapter_path: chapter_path.clone(),
             spine_parts: &spine_parts,
         };
+        let unit_index = retain_locations.then(|| {
+            source_map.push_unit(
+                SourceUnitKind::SpineItem,
+                *spine_index,
+                None,
+                Some(chapter_path.clone()),
+            )
+        });
+        let block_start = doc.blocks.len();
         // Chapter-start anchor: renders only when a link targets this chapter.
         doc.blocks.push(Block::Paragraph(vec![Inline::Anchor(chapter_path.clone())]));
         doc.blocks.extend(crate::shared::html::to_blocks(body, &css, &ctx)?);
+        if let Some(unit_index) = unit_index {
+            source_map.push_span(unit_index, block_start, doc.blocks.len(), None);
+        }
         converted += 1;
     }
     if spine_entries > 0 && converted == 0 {
@@ -101,7 +128,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     }
 
     doc.assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(doc)
+    Ok(LocatedDocument { document: doc, source_map })
 }
 
 /// A chapter's CSS cascade: its linked stylesheets and inline `<style>`

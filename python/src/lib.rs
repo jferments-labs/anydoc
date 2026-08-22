@@ -7,6 +7,7 @@ use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 
 mod document;
+mod locations;
 
 create_exception!(
     anydoc,
@@ -146,7 +147,7 @@ fn format_from_path(path: PathBuf) -> Option<&'static str> {
     anydoc::Format::from_path(&path).map(format_name)
 }
 
-/// Convert a document file to Markdown. The format is detected from the file
+/// Convert a document file to Markdown. The format is detected from the
 /// content; the extension is the fallback for signature-less formats (CSV)
 /// and unrecognizable containers.
 #[pyfunction]
@@ -182,6 +183,22 @@ fn to_document(
     document::document(py, parsed)
 }
 
+/// Parse an in-memory document together with format-native source locations
+/// when available. Existing `to_document` output remains unchanged.
+#[pyfunction]
+#[pyo3(signature = (data, format=None))]
+fn to_document_with_locations(
+    py: Python<'_>,
+    data: Vec<u8>,
+    format: Option<&str>,
+) -> PyResult<locations::LocatedDocument> {
+    let format = format.map(parse_format).transpose()?;
+    let parsed = py
+        .detach(|| anydoc::to_document_with_locations(&data, format))
+        .map_err(|e| convert_error(py, e))?;
+    locations::located_document(py, parsed)
+}
+
 /// Convert documents to GitHub-Flavored Markdown.
 #[pymodule]
 fn _anydoc(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -191,6 +208,7 @@ fn _anydoc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_markdown, m)?)?;
     m.add_function(wrap_pyfunction!(to_markdown_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(to_document, m)?)?;
+    m.add_function(wrap_pyfunction!(to_document_with_locations, m)?)?;
     m.add_class::<document::Asset>()?;
     m.add_class::<document::Block>()?;
     m.add_class::<document::Cell>()?;
@@ -204,6 +222,11 @@ fn _anydoc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<document::Note>()?;
     m.add_class::<document::Style>()?;
     m.add_class::<document::Table>()?;
+    m.add_class::<locations::LocatedDocument>()?;
+    m.add_class::<locations::SourceMap>()?;
+    m.add_class::<locations::SourceUnit>()?;
+    m.add_class::<locations::SourceSpan>()?;
+    m.add_class::<locations::SourceCoordinates>()?;
     m.add("ConvertError", m.py().get_type::<ConvertError>())?;
     m.add("EncryptedError", m.py().get_type::<EncryptedError>())?;
     m.add("MalformedError", m.py().get_type::<MalformedError>())?;

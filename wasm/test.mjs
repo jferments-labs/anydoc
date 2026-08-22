@@ -11,10 +11,13 @@ import {
   formatFromExtension,
   formatFromPath,
   toDocument,
+  toDocumentWithLocations,
   toMarkdownBytes,
 } from './pkg/anydoc_wasm.js'
 
 const fixture = (name) => fileURLToPath(new URL(`../tests/fixtures/${name}`, import.meta.url))
+const sourceFixture = (name) =>
+  fileURLToPath(new URL(`../tests/source-location-fixtures/${name}`, import.meta.url))
 
 initSync({ module: await readFile(fileURLToPath(new URL('./pkg/anydoc_wasm_bg.wasm', import.meta.url))) })
 
@@ -23,6 +26,7 @@ const RICH = await readFile(fixture('docx/handmade-rich.docx'))
 const CSV = await readFile(fixture('csv/sheet.csv'))
 const PDF = await readFile(fixture('pdf/text.pdf'))
 const ENCRYPTED = await readFile(fixture('malformed/encrypted--errors.odt'))
+const SOURCE_PPTX = await readFile(sourceFixture('two-slides.pptx'))
 
 test('toMarkdownBytes converts in memory', () => {
   const markdown = toMarkdownBytes(RICH, 'docx')
@@ -41,13 +45,39 @@ test('pdf converts to Markdown but has no document model', () => {
   assert.throws(() => toDocument(PDF), /pdf/i)
 })
 
-test('toDocument exposes the document model', () => {
+test('toDocument exposes the unchanged document model', () => {
   const document = toDocument(OUTLINE, 'docx')
   const heading = document.blocks.find((block) => block.kind === 'heading')
   assert.ok(heading.level >= 1 && heading.level <= 6)
   assert.equal(typeof heading.content[0].text, 'string')
   assert.equal(heading.content[0].kind, 'text')
   assert.equal(typeof heading.content[0].style.bold, 'boolean')
+  assert.equal('sourceMap' in document, false)
+})
+
+test('toDocumentWithLocations exposes slide provenance opt in', () => {
+  const located = toDocumentWithLocations(SOURCE_PPTX, 'pptx')
+  assert.deepEqual(located.sourceMap.units, [
+    { kind: 'slide', index: 0, originPart: 'ppt/slides/slide1.xml' },
+    { kind: 'slide', index: 1, originPart: 'ppt/slides/slide2.xml' },
+  ])
+  assert.deepEqual(located.sourceMap.spans, [
+    { unitIndex: 0, blockStart: 0, blockEnd: 1 },
+    { unitIndex: 1, blockStart: 1, blockEnd: 2 },
+  ])
+  assert.deepEqual(located.document.blocks.map((block) => block.kind), ['paragraph', 'paragraph'])
+})
+
+test('toDocumentWithLocations exposes Word outline sections', () => {
+  const plain = toDocument(OUTLINE, 'docx')
+  const located = toDocumentWithLocations(OUTLINE, 'docx')
+  assert.equal(located.document.blocks.length, plain.blocks.length)
+  assert.ok(located.sourceMap.units.some((unit) => unit.kind === 'outlineSection'))
+  assert.ok(
+    located.sourceMap.spans.some(
+      (span) => span.coordinates?.kind === 'outlineLevel' && span.coordinates.level >= 1,
+    ),
+  )
 })
 
 test('toDocument carries embedded assets as Uint8Arrays', () => {

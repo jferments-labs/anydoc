@@ -137,6 +137,25 @@ pub fn to_document(
     formats::parse(bytes, resolve_format(bytes, format.into())?)
 }
 
+/// Parse an in-memory document together with source-defined structural
+/// locations when the selected frontend can retain them.
+///
+/// This is additive to [`to_document`]: the existing [`model::Document`]
+/// remains unchanged and is available as [`model::LocatedDocument::document`].
+/// Current locations include PresentationML and OpenDocument slides, EPUB
+/// spine items, and source outline sections in Word/OpenDocument text
+/// frontends. Formats that expose no reliable source unit return an empty
+/// source map rather than inventing pagination or other layout-derived
+/// boundaries.
+///
+/// Unsupported for [`Format::Pdf`] for the same reason as [`to_document`].
+pub fn to_document_with_locations(
+    bytes: &[u8],
+    format: impl Into<Option<Format>>,
+) -> Result<model::LocatedDocument, ConvertError> {
+    formats::parse_with_locations(bytes, resolve_format(bytes, format.into())?)
+}
+
 fn resolve_format(bytes: &[u8], format: Option<Format>) -> Result<Format, ConvertError> {
     format.or_else(|| Format::from_bytes(bytes)).ok_or_else(|| {
         ConvertError::Unsupported("unrecognized file content: name the format explicitly".into())

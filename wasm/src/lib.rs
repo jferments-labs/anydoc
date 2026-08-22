@@ -6,6 +6,7 @@
 use wasm_bindgen::prelude::*;
 
 mod document;
+mod locations;
 mod typescript;
 
 pub use document::*;
@@ -115,6 +116,19 @@ pub fn to_document(bytes: &[u8], format: Option<Format>) -> Result<JsValue, JsVa
     let document =
         anydoc::to_document(bytes, format.map(anydoc::Format::from)).map_err(convert_error)?;
     serde_wasm_bindgen::to_value(&Document::from(document))
+        .map_err(|error| js_sys::Error::new(&error.to_string()).into())
+}
+
+/// Parse an in-memory document together with format-native source locations
+/// when available. Existing `toDocument` output remains unchanged.
+#[wasm_bindgen(js_name = toDocumentWithLocations, unchecked_return_type = "LocatedDocument")]
+pub fn to_document_with_locations(
+    bytes: &[u8],
+    format: Option<Format>,
+) -> Result<JsValue, JsValue> {
+    let located = anydoc::to_document_with_locations(bytes, format.map(anydoc::Format::from))
+        .map_err(convert_error)?;
+    serde_wasm_bindgen::to_value(&locations::LocatedDocument::from(located))
         .map_err(|error| js_sys::Error::new(&error.to_string()).into())
 }
 
