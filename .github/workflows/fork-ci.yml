@@ -54,10 +54,10 @@ jobs:
       - name: Rust tests
         run: cargo test --locked
 
-      - name: Regenerate source-location fixture
+      - name: Regenerate source-location fixtures
         run: |
           python tests/gen_source_location_fixtures.py
-          git diff --exit-code -- tests/source-location-fixtures/source-origin.xlsx
+          git diff --exit-code -- tests/source-location-fixtures
 
       - name: Install Node dependencies
         run: npm ci
