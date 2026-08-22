@@ -163,7 +163,7 @@ jobs:
     needs: [gate, test-node]
     # npm rejects provenance attestations minted on self-hosted runners
     # (Blacksmith counts as self-hosted), so publishing runs GitHub-hosted.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       id-token: write # npm provenance
@@ -216,7 +216,7 @@ jobs:
     needs: [gate, test-rust]
     # npm rejects provenance attestations minted on self-hosted runners
     # (Blacksmith counts as self-hosted), so build and publish run GitHub-hosted.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       id-token: write # npm provenance
@@ -419,7 +419,7 @@ jobs:
   publish-pypi:
     name: Publish PyPI
     needs: [gate, test-wheels, build-sdist]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       id-token: write # PyPI trusted publishing
@@ -448,7 +448,7 @@ jobs:
     name: GitHub release
     needs: [publish-npm, publish-npm-wasm, publish-crates, publish-pypi]
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
